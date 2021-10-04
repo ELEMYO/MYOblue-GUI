@@ -2,6 +2,7 @@
 # 2021-09-01 by ELEMYO (https://github.com/ELEMYO)
 # 
 # Changelog:
+#     2021-10-04 - serial port connection stability improved
 #     2021-09-01 - initial release
 
 # Code is placed under the MIT license
@@ -36,6 +37,7 @@ import time
 from scipy.signal import butter, lfilter
 import serial.tools.list_ports
 from scipy.fftpack import fft
+from serial import SerialException
 
 # Main window
 class GUI(QtWidgets.QMainWindow):
@@ -437,6 +439,7 @@ class GUI(QtWidgets.QMainWindow):
     # Exit event
     def closeEvent(self, event):
         self.monitor.ser.close()
+        self.monitor.ser = serial.Serial()
         event.accept()
 
 # Serial monitor class
@@ -455,6 +458,7 @@ class SerialMonitor(QtCore.QThread):
 
     # Listening port
     def run(self):
+        self.ser = serial.Serial()
         while self.running is True:
             while self.COM == '': 
                 ports = serial.tools.list_ports.comports(include_links=False)
@@ -462,7 +466,10 @@ class SerialMonitor(QtCore.QThread):
                     self.COM = port.device
                 if self.COM != '':
                     time.sleep(0.5)
-                    self.ser = serial.Serial(self.COM, self.baudRate)
+                    try:
+                        self.ser = serial.Serial(self.COM, self.baudRate)
+                    except SerialException :
+                        pass
                     self.checkPort = 0
             while self.checkPort:
                 ports = serial.tools.list_ports.comports(include_links=False)
@@ -471,16 +478,24 @@ class SerialMonitor(QtCore.QThread):
                         time.sleep(0.5)
                         self.ser = serial.Serial(self.COM, self.baudRate)
                         self.checkPort = 0
-                   
+            
             # Waiting for data
-            while (self.ser.inWaiting() == 0):
+            try:
+                while (self.ser.inWaiting() == 0):
+                    pass
+                # Reading data
+                msg = self.ser.read( self.ser.inWaiting() )
+                if msg:
+                    #Parsing data
+                    self.bufferUpdated.emit(msg)
+                    time.sleep(self.delay)   
+            except SerialException :
+                try:
+                    self.ser.close()
+                    self.ser.open()
+                except SerialException :
+                    pass
                 pass
-            # Reading data
-            msg = self.ser.read( self.ser.inWaiting() )
-            if msg:
-                #Parsing data
-                self.bufferUpdated.emit(msg)
-                time.sleep(self.delay)
                 
 # Starting program       
 if __name__ == '__main__':
