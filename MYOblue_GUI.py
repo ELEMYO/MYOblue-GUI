@@ -27,9 +27,21 @@
 # THE SOFTWARE.
 # ===============================================
 
+import sys
+import subprocess
+import pkg_resources
+
+required = {'pyserial', 'pyqtgraph', 'pyqt5', 'numpy', 'scipy'} 
+installed = {pkg.key for pkg in pkg_resources.working_set}
+missing = required - installed
+
+if missing:
+    # implement pip as a subprocess:
+    subprocess.call(['pip', 'install',*missing])
+
+
 from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtCore import Qt
-import sys
 import serial
 import pyqtgraph as pg
 import numpy as np
@@ -81,13 +93,13 @@ class GUI(QtWidgets.QMainWindow):
         self.MSG_NUM = [0]*4
 
         # Menu panel
-        stopAction = QtGui.QAction(QtGui.QIcon('img/pause.png'), 'Stop/Start (Space)', self)
+        stopAction = QtWidgets.QAction(QtGui.QIcon('img/pause.png'), 'Stop/Start (Space)', self)
         stopAction.setShortcut('Space')
         stopAction.triggered.connect(self.stop)
-        refreshAction = QtGui.QAction(QtGui.QIcon('img/refresh.png'), 'Refresh (R)', self)
+        refreshAction = QtWidgets.QAction(QtGui.QIcon('img/refresh.png'), 'Refresh (R)', self)
         refreshAction.setShortcut('r')
         refreshAction.triggered.connect(self.refresh)
-        exitAction = QtGui.QAction(QtGui.QIcon('img/out.png'), 'Exit (Esc)', self)
+        exitAction = QtWidgets.QAction(QtGui.QIcon('img/out.png'), 'Exit (Esc)', self)
         exitAction.setShortcut('Esc')
         exitAction.triggered.connect(self.close)
         
@@ -164,7 +176,6 @@ class GUI(QtWidgets.QMainWindow):
         self.button_group = QtWidgets.QButtonGroup()
         for i in range(4):
             self.button_group.addButton(fftButton[i], i + 1)
-        self.button_group.buttonClicked.connect(self._on_radio_button_clicked)
         
         
         # Numbering of graphs
@@ -432,10 +443,6 @@ class GUI(QtWidgets.QMainWindow):
         self.MA[i][1] = (1 - alpha)*(self.MA[i][0]) + alpha*self.MA[i][1];
         self.MA[i][2] = (1 - alpha)*(self.MA[i][1]) + alpha*self.MA[i][2];
         return self.MA[i][2]*2
-    # Change gain
-    def _on_radio_button_clicked(self, button):
-        if self.monitor.COM != '':
-            self.monitor.ser.write(bytearray([button.Value]))
     # Exit event
     def closeEvent(self, event):
         self.monitor.ser.close()
@@ -458,7 +465,6 @@ class SerialMonitor(QtCore.QThread):
 
     # Listening port
     def run(self):
-        self.ser = serial.Serial()
         while self.running is True:
             while self.COM == '': 
                 ports = serial.tools.list_ports.comports(include_links=False)
@@ -487,8 +493,7 @@ class SerialMonitor(QtCore.QThread):
                 msg = self.ser.read( self.ser.inWaiting() )
                 if msg:
                     #Parsing data
-                    self.bufferUpdated.emit(msg)
-                    time.sleep(self.delay)   
+                    self.bufferUpdated.emit(msg) 
             except SerialException :
                 try:
                     self.ser.close()
@@ -496,6 +501,7 @@ class SerialMonitor(QtCore.QThread):
                 except SerialException :
                     pass
                 pass
+            time.sleep(self.delay)  
                 
 # Starting program       
 if __name__ == '__main__':
