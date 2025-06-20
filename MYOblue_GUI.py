@@ -30,15 +30,15 @@
 
 import sys
 import os
-import pkg_resources
+from importlib import metadata
 
-required = {'pyserial', 'pyqtgraph', 'pyqt5', 'numpy', 'scipy'} 
-installed = {pkg.key for pkg in pkg_resources.working_set}
-missing = required - installed
+missing = {'pyserial', 'pyqtgraph', 'PyQt5', 'numpy', 'scipy'} 
+for dist in metadata.distributions():
+    if dist.name in missing:
+        missing.remove(dist.name)
 
 if missing:
     for module in missing:
-        if module == "pyqt5": module += "==5.15.5"
         os.system("python -m pip install " + module)
 
 from PyQt5 import QtCore, QtWidgets, QtGui
