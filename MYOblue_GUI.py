@@ -100,7 +100,7 @@ class GUI(QtWidgets.QMainWindow):
         self.MSG_NUM_0 = [0]*4
 
         # Menu panel
-        self.liveFromSerialAction = QtWidgets.QAction(QtGui.QIcon('img/play.png'), 'Start\Stop live from serial ', self)
+        self.liveFromSerialAction = QtWidgets.QAction(QtGui.QIcon('img/play.png'), 'Start/Stop live from serial ', self)
         self.liveFromSerialAction.setCheckable(True)
         self.liveFromSerialAction.setChecked(False)
         self.liveFromSerialAction.triggered.connect(self.liveFromSerial)
