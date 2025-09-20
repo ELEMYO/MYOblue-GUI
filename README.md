@@ -21,5 +21,6 @@ Supported operating systems: **Windows**, **Linux**, **macOS**.
 If you need assistance, please contact us ([contacts](https://elemyo.com/support/contacts)).
 
 ## 4 License
+This code is open source.
 
 The code contained in this repository and the executable distributions are licensed under the terms of the MIT license. If you have questions about licensing please contact us ([contacts](https://elemyo.com/support/contacts)).
