@@ -77,7 +77,7 @@ class GUI(QtWidgets.QMainWindow):
         self.setWindowTitle("ELEMYO MYOblue GUI v1.2.0")
         self.setWindowIcon(QtGui.QIcon('img/icon.png'))
         
-        self.fs = 500 # Sampling frequency in Hz
+        self.fs = 1000 # Sampling frequency in Hz
         self.dt = [1/self.fs]*8  # Time between two signal measurements in s
         
         self.timeWidth = 10 # Plot window length in seconds
@@ -1007,3 +1007,4 @@ if __name__ == '__main__':
     window.show()
     window.start()
     sys.exit(app.exec_())
+
