@@ -4,7 +4,7 @@ This repository contains the source code of the MYOblue-GUI v1.2.1
 
 ## 1 Introduction
 
-MYOblue_GUI - free, cross-platform, open source Python based GUI for real-time visualization, analysis, and processing of EMG/ECG signals.
+MYOblue_GUI - is powerful and easy to use, free, open-source, cross-platform Python-based graphical interface for EMG analysis using MYOblue sensors. MYOblue GUI provides real-time visualization, analysis, recording and processing of EMG and ECG signals.
 
 Supported operating systems: **Windows**, **Linux**, **macOS**.
 
