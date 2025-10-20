@@ -9,12 +9,12 @@ MYOblue_GUI - free, cross-platform, open source Python based GUI for real-time v
 Supported operating systems: **Windows**, **Linux**, **macOS**.
 
 ## 2 Functional
-- real-time EMG signals from 1 to 8 sensors.
-- real-time signal envelope and integral.
-- band pass and 50/60 Hz notch filters.
-- recording EMG signals to *.bin and *.txt files.
-- playback of the recorded signals.
-- signal spectrum.
+- in-depth EMG signal analysis.
+- real-time display of **raw**, **rectified**, **smoothed**, and **RMS** signals from up to eight MYOblue sensors.
+- real-time **FFT** analysys of EMG signals.
+- band-pass and 50/60 Hz notch filters.
+- **record and playback** up to eight **synchronized** channels.
+- recording EMG to a ".txt" file for import into external programs.
 
 ## 3 Support
 
