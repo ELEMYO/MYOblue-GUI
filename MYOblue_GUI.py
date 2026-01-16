@@ -26,23 +26,32 @@
 import sys
 import os
 from importlib import metadata
+import subprocess
 
-print(">>> MYOblue_GUI is launched. Please, wait...")
+print(">>> MYOblue_GUI is launching. Please wait...")
 
-missing = {'pyserial', 'pyqtgraph', 'PyQt5', 'numpy', 'scipy'} 
-for dist in metadata.distributions():
-    if dist.name in missing:
-        missing.remove(dist.name)
+required = {'pyserial', 'pyqtgraph', 'PyQt5', 'numpy', 'scipy'}
+
+installed = {dist.metadata['Name'].lower() for dist in metadata.distributions()}
+
+missing = {pkg for pkg in required if pkg.lower() not in installed}
 
 if missing:
-    print(">>> Installing missing libraries: " + str(missing))
-    missing_list = missing.copy()
-    for module in missing_list:
-        return_code_success = os.system("python -m pip install " + module)
-        if return_code_success == 0:
+    print(">>> Installing missing libraries:", missing)
+
+    for module in list(missing):
+        print(f">>> Installing {module}...")
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", module],
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode == 0:
             missing.remove(module)
         else:
-            print(">>> \"" +module+ "\" NOT installed successfully. Please check your internet connection and try again or contact us for support: info@elemyo.com")
+            print(f">>> \"{module}\" NOT installed successfully.")
+            print(">>> Please check your internet connection or contact support: info@elemyo.com")
 
 from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtCore import Qt, QEvent
@@ -186,10 +195,10 @@ class GUI(QtWidgets.QMainWindow):
         self.EnvelopeSignalAction.setChecked(self.cfg.getboolean("APPLICATION", "Envelope"))
         self.EnvelopeSignalAction1 = QtWidgets.QLabel('    ', self)
         self.EnvelopeSignalAction2 = QtWidgets.QLabel('      ', self)
-        self.envelopeSmoothingСoefficient = QtWidgets.QDoubleSpinBox()
-        self.envelopeSmoothingСoefficient.setSingleStep(0.01)
-        self.envelopeSmoothingСoefficient.setRange(0, 1)
-        self.envelopeSmoothingСoefficient.setValue(self.cfg.getfloat("APPLICATION", "EnvelopeSmoothingСoefficient"))
+        self.envelopeSmoothingCoefficient = QtWidgets.QDoubleSpinBox()
+        self.envelopeSmoothingCoefficient.setSingleStep(0.01)
+        self.envelopeSmoothingCoefficient.setRange(0, 1)
+        self.envelopeSmoothingCoefficient.setValue(self.cfg.getfloat("APPLICATION", "EnvelopeSmoothingCoefficient"))
         
         self.RMSsignalAction = QtWidgets.QCheckBox('RMS:', self)
         self.RMSsignalAction.setChecked(self.cfg.getboolean("APPLICATION", "RMS"))
@@ -240,7 +249,7 @@ class GUI(QtWidgets.QMainWindow):
             elif isinstance(w, QtWidgets.QWidget): toolbar[1].addWidget(w)
         
         widgets = [self.sensorsNumberAction, self.sensorsNumber, self.rawSignalAction1, self.rawSignalAction, self.rectificationSignalAction1, self.rectificationSignalAction,
-                   self.EnvelopeSignalAction1, self.EnvelopeSignalAction, self.envelopeSmoothingСoefficient, self.EnvelopeSignalAction2,
+                   self.EnvelopeSignalAction1, self.EnvelopeSignalAction, self.envelopeSmoothingCoefficient, self.EnvelopeSignalAction2,
                    self.RMSsignalAction1, self.RMSsignalAction, self.RMSinterval, self.RMSsignalAction2,
                    self.bandstopAction, self.notchActiontypeBox, self.bandpassAction2, self.bandpassAction, self.passLowFreq,
                    self.bandpassAction1, self.passHighFreq]
@@ -542,7 +551,7 @@ class GUI(QtWidgets.QMainWindow):
         self.cfg.set("APPLICATION", "RAW_EMG", str(self.rawSignalAction.isChecked()))
         self.cfg.set("APPLICATION", "Rectification", str(self.rectificationSignalAction.isChecked()))
         self.cfg.set("APPLICATION", "Envelope", str(self.EnvelopeSignalAction.isChecked()))
-        self.cfg.set('APPLICATION', 'EnvelopeSmoothingСoefficient', str(self.envelopeSmoothingСoefficient.value()))
+        self.cfg.set('APPLICATION', 'EnvelopeSmoothingCoefficient', str(self.envelopeSmoothingCoefficient.value()))
         self.cfg.set("APPLICATION", "RMS", str(self.RMSsignalAction.isChecked()))
         self.cfg.set('APPLICATION', 'RMSinterval', str(self.RMSinterval.value()))
         self.cfg.set("APPLICATION", "BandStopFilter", str(self.bandstopAction.isChecked()))
@@ -586,10 +595,10 @@ class GUI(QtWidgets.QMainWindow):
             self.notchActiontypeBox.setDisabled(True)
             
         if self.EnvelopeSignalAction.isChecked():
-            self.envelopeSmoothingСoefficient.setDisabled(False)
-            self.MovingAverage.MA_alpha = self.envelopeSmoothingСoefficient.value()
+            self.envelopeSmoothingCoefficient.setDisabled(False)
+            self.MovingAverage.MA_alpha = self.envelopeSmoothingCoefficient.value()
         else:
-            self.envelopeSmoothingСoefficient.setDisabled(True)
+            self.envelopeSmoothingCoefficient.setDisabled(True)
             
         if self.RMSsignalAction.isChecked():
             self.RMSinterval.setDisabled(False)
@@ -1137,3 +1146,4 @@ if __name__ == '__main__':
     window.show()
     window.start()
     sys.exit(app.exec_())
+
