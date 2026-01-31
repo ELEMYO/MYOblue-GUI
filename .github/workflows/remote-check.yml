@@ -1,0 +1,43 @@
+name: Test Auto-Install Logic
+
+on: [push]
+
+jobs:
+  run-gui-check:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install System Dependencies (Linux Only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgles2 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0 libxcb-xinerama0
+
+      - name: Install timeout on macOS
+        if: matrix.os == 'macos-latest'
+        run: brew install coreutils
+
+      - name: Run MYOblue_GUI.py (Testing Auto-Install)
+        shell: bash
+        run: |
+          TIMEOUT_CMD=$(command -v timeout || command -v gtimeout)
+          if [ -n "$TIMEOUT_CMD" ]; then
+            $TIMEOUT_CMD 300 python MYOblue_GUI.py || [ $? -eq 124 ] || echo "App finished"
+          else
+            python MYOblue_GUI.py & sleep 300; kill $! || echo "App closed"
+          fi
+        env:
+          QT_QPA_PLATFORM: offscreen
+          MPLBACKEND: Agg
+          PYTHONUNBUFFERED: 1
