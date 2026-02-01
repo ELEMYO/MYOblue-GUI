@@ -9,15 +9,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, windows-2019, ubuntu-latest, ubuntu-22.04, macos-latest, macos-13]
+        os: [
+          windows-latest, windows-2019, 
+          ubuntu-latest, ubuntu-22.04, ubuntu-20.04, 
+          macos-latest, macos-15, macos-14,
+          macos-13-xlarge
+        ]
     runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: [actions/checkout@v4](https://github.com)
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: [actions/setup-python@v5](https://github.com)
         with:
           python-version: '3.12'
 
