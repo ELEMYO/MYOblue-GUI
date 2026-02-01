@@ -1,28 +1,23 @@
 name: Global OS Auto-Install Test
 
-on: [push]
+on:
+  workflow_dispatch:
+  push:
 
 jobs:
   run-gui-check:
     strategy:
-      fail-fast: false 
+      fail-fast: false
       matrix:
-        os: [
-          windows-latest, windows-2019, 
-          ubuntu-latest, ubuntu-22.04, ubuntu-20.04,
-          macos-15,      
-          macos-14,      
-          macos-13,      
-          macos-12       
-        ]
+        os: [windows-latest, windows-2019, ubuntu-latest, ubuntu-22.04, macos-latest, macos-13]
     runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout Code
-        uses: [actions/checkout@v4](https://github.com)
+        uses: actions/checkout@v4
 
       - name: Set up Python 3.12
-        uses: [actions/setup-python@v5](https://github.com)
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
@@ -38,13 +33,12 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: brew install coreutils
 
-      - name: Run MYOblue_GUI.py (Testing Auto-Install)
+      - name: Run MYOblue_GUI.py
         shell: bash
         run: |
           TIMEOUT_CMD=$(command -v timeout || command -v gtimeout)
-          
           if [ -n "$TIMEOUT_CMD" ]; then
-            $TIMEOUT_CMD 300 python MYOblue_GUI.py || [ $? -eq 124 ] || echo "Finished"
+            $TIMEOUT_CMD 300 python MYOblue_GUI.py || [ $? -eq 124 ] || echo "App finished"
           else
             python MYOblue_GUI.py & PID=$!
             sleep 300
