@@ -1,6 +1,6 @@
-# MYOblue-GUI v1.2.1
+# MYOblue-GUI v1.2.2
 
-This repository contains the source code of the MYOblue-GUI v1.2.1
+This repository contains the source code of the MYOblue-GUI v1.2.2
 
 ## 1 Introduction
 
