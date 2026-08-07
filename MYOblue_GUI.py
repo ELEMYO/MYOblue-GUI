@@ -83,6 +83,7 @@ class GUI(QtWidgets.QMainWindow):
         os.makedirs(self.REC_DIR, exist_ok=True) 
         self.setWindowIcon(QtGui.QIcon(os.path.join(self.BASE_DIR, 'img', 'icon.png')))
         self.delay = 0.120 # Graphics update delay
+        self.pollDelay = 0.01 # Serial/file acquisition poll interval
         self.NUM_SENSORS = 8 
         self.cfg = ConfigParser()
         self.cfg.optionxform = str
@@ -254,6 +255,7 @@ class GUI(QtWidgets.QMainWindow):
         self.bandpassAction2 = QtWidgets.QLabel('       ', self)
         self.bandpassAction.toggled.connect(self.bandpassActionTriggered)
         
+
         self.sensorSelectedAction = QtWidgets.QLabel('Sensor: ', self)
         self.sensorSelectedAction.setStyleSheet("background-color: transparent; font-weight: bold;")
 
@@ -287,6 +289,7 @@ class GUI(QtWidgets.QMainWindow):
         for w in widgets:
             if isinstance(w, QtWidgets.QAction): toolbar[2].addAction(w)
             elif isinstance(w, QtWidgets.QWidget): toolbar[2].addWidget(w)
+       
         
         pg.setConfigOptions(antialias=False) 
         self.pw = []
@@ -437,6 +440,10 @@ class GUI(QtWidgets.QMainWindow):
         self.setSensorsNumber(sensors_val)
         self.mainrun = MainRun(self.delay)
         self.mainrun.bufferUpdated.connect(self.updateListening, QtCore.Qt.ConnectionType.QueuedConnection)  
+        
+        self.serialPoll = QtCore.QTimer(self)
+        self.serialPoll.setInterval(int(self.pollDelay * 1000))
+        self.serialPoll.timeout.connect(self.pollData)
         print(">>> MYOblue_GUI was launched successfully.")        
     
     def bandstopActionTriggered(self):
@@ -509,13 +516,16 @@ class GUI(QtWidgets.QMainWindow):
     def start(self):
         self.mainrun.running = True
         self.mainrun.start()
+        self.serialPoll.start()
     
     # Pause data plotting
     def pause(self):
         if self.pauseAction.isChecked():
+            self.serialPoll.stop()
             self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "pause ON" + "\n")
             self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
         else:
+            self.serialPoll.start()
             self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "pause OFF" + "\n")
             self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
 
@@ -560,7 +570,7 @@ class GUI(QtWidgets.QMainWindow):
             self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
             self.recordingFile_TXT = open(self.recordingFileName_TXT, "a") # Data file creation
             self.recordingFile_TXT.write(datetime.now().strftime("Date: %Y.%m.%d\rTime: %H:%M:%S") + "\r\n") # Data file name
-            self.recordingFile_TXT.write("File format: \r\n8 sensors data in mkV\r\n") # Data file format
+            self.recordingFile_TXT.write("File format: \r\n8 sensors data in mkV and timestamp\r\n") # Data file format
             self.recordingFile_BIN = open(self.recordingFileName_BIN, 'ab')
             self.is_recording = True
         else:
@@ -641,9 +651,17 @@ class GUI(QtWidgets.QMainWindow):
                         labelOpts={'position': 0.9, 'color': 'w'}
                     )
                     
-                    pw.addItem(marker_line)                
+                    pw.addItem(marker_line)
+                    
         super().keyPressEvent(event)        
-
+    
+    
+    def pollData(self):
+        if (self.PlaybackAction.isChecked() and self.loadFileName != ''):
+            self.readFromFile()
+        if (self.liveFromSerialAction.isChecked()):
+            self.readFromSerial()       
+        
     # Update
     def updateListening(self):  
         
@@ -709,7 +727,13 @@ class GUI(QtWidgets.QMainWindow):
             if not hasattr(self, '_fft_frame_counter'):
                 self._fft_frame_counter = 0
             self._fft_frame_counter += 1
-
+                
+            v_time_max = max(self.v_time)
+            threshold = v_time_max - 0.250
+            max_search_depth = 300
+            
+            
+            max_ms_len = max(self.ms_len)
             for i in range( num_sensors ):
                 self.cfg.set(f"SENSOR{i+1}", "dt_(s)", str(self.dt[i]))
                 self.cfg.set(f"SENSOR{i+1}", "Trigger_value", str(self.TriggerValue[i].value()))
@@ -718,10 +742,13 @@ class GUI(QtWidgets.QMainWindow):
                 dt = self.dt[i]
                 ms_len = self.ms_len[i]
                 
-                plot = np.concatenate((self.data.raw[i][self.l[i]:], self.data.raw[i][:self.l[i]]))
                 timePlot = np.concatenate((self.data.time[i][self.l[i]:], self.data.time[i][:self.l[i]]))
-
-
+                target_index = next(
+                    (idx for idx in range(len(timePlot) - 1, len(timePlot) - 1 - max_search_depth, -1) 
+                     if timePlot[idx] < threshold), 
+                    len(timePlot) - 1)
+            
+                plot = np.concatenate((self.data.raw[i][self.l[i]:], self.data.raw[i][:self.l[i]]))
                 plot -= 8192
                 plot *= 0.30517578125  # Precomputed constant (2.5 / 16384.0 * 2000)
             
@@ -740,18 +767,19 @@ class GUI(QtWidgets.QMainWindow):
                 self.data.RMS[i][0:int(1.5*self.fs)] = 0
                 
                 if not self.pauseAction.isChecked():
+                    end_pos = target_index + 1
                     
                     # Plot raw data or rectification
-                    if  raw_enabled: pw.p.setData(y=plot, x=timePlot)
-                    elif  rect_enabled: pw.p.setData(y=self.data.rectification[i], x=timePlot)
-                    elif not raw_enabled: pw.p.clear()
+                    if raw_enabled: pw.p.setData(y=plot[:end_pos], x=timePlot[:end_pos])
+                    elif rect_enabled:  pw.p.setData(y=self.data.rectification[i][:end_pos], x=timePlot[:end_pos])
+                    elif not raw_enabled:  pw.p.clear()
                     
                     # Plot envelope data
-                    if  env_enabled: pw.pe.setData(y=self.data.envelope[i], x=timePlot)
+                    if  env_enabled: pw.pe.setData(y=self.data.envelope[i][:end_pos], x=timePlot[:end_pos])
                     else: pw.pe.clear()     
                     
                     # Plot RMS data
-                    if  rms_enabled: pw.pi.setData(y=self.data.RMS[i], x=timePlot)
+                    if  rms_enabled: pw.pi.setData(y=self.data.RMS[i][:end_pos], x=timePlot[:end_pos])
                     else: pw.pi.clear()
                     
                     # Plot histogram
@@ -806,7 +834,6 @@ class GUI(QtWidgets.QMainWindow):
                                 widget.removeItem(item)
 
             if (self.dataRecordingAction.isChecked()):
-                max_ms_len = max(self.ms_len)
                 DataRec = np.zeros((self.NUM_SENSORS, max_ms_len), dtype=np.float32)
                 DataRecBin = np.zeros((self.NUM_SENSORS, max_ms_len), dtype=np.float32)
                 TimeRec = np.zeros((self.NUM_SENSORS, max_ms_len), dtype=np.float64)
@@ -861,12 +888,12 @@ class GUI(QtWidgets.QMainWindow):
                                                int(DataRecBin[4][i]), int(DataRecBin[5][i]), int(DataRecBin[6][i]), int(DataRecBin[7][i]))             
                         self.recordingFile_BIN.write(bin_data)             
 
-    # Read data from File   
-    def readFromFile(self): 
         self.ms_len = [0]*self.NUM_SENSORS
         
-        j = 0
-        while j < 200:
+    # Read data from File   
+    def readFromFile(self): 
+        j = 0        
+        while j < 20:
             j += 1
             
             if ( self.sliderpos > self.loadDataLen - 2):
@@ -897,8 +924,6 @@ class GUI(QtWidgets.QMainWindow):
 
     # Read data from serial                  
     def readFromSerial(self): 
-        self.ms_len = [0]*self.NUM_SENSORS
-        
         msg = self.serialMonitor.serialRead() 
         TIME = time.perf_counter()
         
@@ -938,7 +963,7 @@ class GUI(QtWidgets.QMainWindow):
                         self.data.time[sensorNum][self.l[sensorNum]-1] = TIME - self.TIMER
                         
                         self.pll_initialized[sensorNum] = True
-                        self.v_time[sensorNum] = max(self.v_time) #TIME - self.TIMER
+                        self.v_time[sensorNum] = max(self.v_time)
                         self.sensor_uptime[sensorNum] = self.v_time[sensorNum]
                             
                     if MSG_NUM - self.MSG_NUM_0[sensorNum] > 0:
@@ -973,49 +998,65 @@ class GUI(QtWidgets.QMainWindow):
                         error = time_pc - self.v_time[sensorNum]
                         burst_counters[sensorNum] -= 1
                     
-                        if burst_counters_0[sensorNum] == self.delay // 119 and burst_counters[sensorNum] == 0 and error*1000 < 130:
+                        if burst_counters_0[sensorNum] == self.delay // 119 and burst_counters[sensorNum] == 0:
                             error = time_pc - self.v_time[sensorNum]
                             if self.v_time[sensorNum] - self.sensor_uptime[sensorNum] < 5.0: self.v_time[sensorNum] += 0.2 * error
                             elif self.v_time[sensorNum] - self.sensor_uptime[sensorNum] < 10.0:  self.v_time[sensorNum] += 0.05 * error
                             elif self.v_time[sensorNum] - self.sensor_uptime[sensorNum] < 15.0: self.v_time[sensorNum] += 0.02 * error
                                                  
-                            self.dt[sensorNum] += (0.0001 * error) / 119
+                            self.dt[sensorNum] += (0.00003 * error) / 119
                             if self.dt[sensorNum] > 0.001015:  self.dt[sensorNum] = 0.001015
                             if self.dt[sensorNum] < 0.000985:  self.dt[sensorNum] = 0.000985
 
-                        sample_idx = 0
-                        for i in range(msg_i+8, msg_i + 246, 2):
-                            if (self.l[sensorNum] == self.dataWidth):
-                                self.l[sensorNum] = 0 
-                                if (self.dataRecordingAction.isChecked()):
-                                    self.recordingFile_BIN.close()
-                                    self.recordingFile_TXT.close()
-                                    self.recordingFile_BIN = open(self.recordingFileName_BIN, 'ab')
-                                    self.recordingFile_TXT = open(self.recordingFileName_TXT, "a")
-                                    
-                            self.data.raw[sensorNum][self.l[sensorNum]] = int(msg[i] | msg[i+1] << 8)
-                            if ( self.l[sensorNum] > 0):
-                                self.data.time[sensorNum][self.l[sensorNum]] = self.data.time[sensorNum][self.l[sensorNum] - 1] + self.dt[sensorNum] 
-                            else:
-                                self.data.time[sensorNum][self.l[sensorNum]] = self.data.time[sensorNum][self.dataWidth - 1] + self.dt[sensorNum]
-                    
-                            self.l[sensorNum] += 1
-                            if (self.ms_len[sensorNum] < self.dataWidth): 
-                                self.ms_len[sensorNum] += 1 
-                            sample_idx += 1
+                        idx = self.l[sensorNum]
+                        width = self.dataWidth
+                        dt_val = self.dt[sensorNum]
+                        
+                        msg_chunk = msg[msg_i+8 : msg_i+246]
+                        incoming_data = np.frombuffer(msg_chunk, dtype=np.uint16)
+                        num_elements = len(incoming_data)
+
+                        if idx + num_elements > width:
+                            space_left = width - idx
                             
-                        timeDifference = self.v_time[sensorNum] - self.data.time[sensorNum][self.l[sensorNum]-1]
+                            self.data.raw[sensorNum][idx:width] = incoming_data[:space_left]
+                            
+                            if self.dataRecordingAction.isChecked():
+                                self.recordingFile_BIN.close()
+                                self.recordingFile_TXT.close()
+                                self.recordingFile_BIN = open(self.recordingFileName_BIN, 'ab')
+                                self.recordingFile_TXT = open(self.recordingFileName_TXT, "a")
+                            
+                            rem = num_elements - space_left
+                            self.data.raw[sensorNum][0:rem] = incoming_data[space_left:]
+                            
+                            t_prev = self.data.time[sensorNum][idx - 1] if idx > 0 else self.data.time[sensorNum][width - 1]
+                            self.data.time[sensorNum][idx:width] = t_prev + np.arange(1, space_left + 1) * dt_val
+                            
+                            t_prev_rem = self.data.time[sensorNum][width - 1]
+                            self.data.time[sensorNum][0:rem] = t_prev_rem + np.arange(1, rem + 1) * dt_val
+                            
+                            idx = rem
+                        else:
+                            end_idx = idx + num_elements
+                            self.data.raw[sensorNum][idx:end_idx] = incoming_data
+                            
+                            t_prev = self.data.time[sensorNum][idx - 1] if idx > 0 else self.data.time[sensorNum][width - 1]
+                            self.data.time[sensorNum][idx:end_idx] = t_prev + np.arange(1, num_elements + 1) * dt_val
+                            
+                            idx = end_idx
+
+                        self.l[sensorNum] = idx
+                        self.ms_len[sensorNum] = min(width, self.ms_len[sensorNum] + num_elements)
+
+                        accuracy = 0
                         if self.v_time[sensorNum] - self.sensor_uptime[sensorNum] < 5.0: accuracy = 0.1
                         elif self.v_time[sensorNum] - self.sensor_uptime[sensorNum] < 10.0: accuracy = 0.05
-                        elif self.v_time[sensorNum] - self.sensor_uptime[sensorNum] < 15.0: accuracy = 0.02
-                        elif self.v_time[sensorNum] - self.sensor_uptime[sensorNum] < 30.0: accuracy = 0.005
-                        else: accuracy = 0.000001
+                        elif self.v_time[sensorNum] - self.sensor_uptime[sensorNum] < 15.0: accuracy = 0.002
                         
-                        if self.v_time[sensorNum] - self.sensor_uptime[sensorNum] < 30:
-                            if timeDifference > accuracy:
-                                self.data.time[sensorNum][:] += timeDifference
-                            if timeDifference < -accuracy:
-                                self.data.time[sensorNum][:] += timeDifference 
+                        timeDifference = self.v_time[sensorNum] - self.data.time[sensorNum][self.l[sensorNum]-1]
+                        if self.v_time[sensorNum] - self.sensor_uptime[sensorNum] < 15:
+                            if abs (timeDifference) > accuracy: self.data.time[sensorNum][:] += timeDifference
 
     def setSensorsNumber(self, num):
         
@@ -1062,6 +1103,7 @@ class GUI(QtWidgets.QMainWindow):
                         pass
     
             self.mainrun.running = False
+            self.serialPoll.stop()
             self.serialMonitor.serialDisconnection()
             event.accept()
 
@@ -1328,6 +1370,7 @@ class CustomPlotWidget(pg.PlotWidget):
                 'left': LiveYAxisItem(sensors_spinbox=sensors_spinbox, orientation='left')
             }
         super().__init__(parent, **kwargs)
+        self.plotItem.setMenuEnabled(False)
         self.plotItem.disableAutoRange(pg.ViewBox.YAxis) 
         self.plotItem.setYRange(-2000, 2000)
         
@@ -1356,6 +1399,11 @@ class CustomPlotWidget(pg.PlotWidget):
         self.plotItem.vb.setCacheMode(QtWidgets.QGraphicsItem.DeviceCoordinateCache)
 
     def onMouseMove(self, evt):
+        
+        current_time = time.time()
+        if hasattr(self, '_last_move_time') and (current_time - self._last_move_time) < 0.016:
+            return
+        self._last_move_time = current_time
         pos = evt[0]
         main_win = self.window()
         
