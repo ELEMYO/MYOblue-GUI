@@ -21,9 +21,10 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
 
-        # Securely download official Python embeddable package using native Invoke-WebRequest
+        # Securely download official Python embeddable package
         Invoke-WebRequest -Uri 'https://python.org' -OutFile 'python-embed.zip' -UseBasicParsing
         Expand-Archive -Path python-embed.zip -DestinationPath dist/MYOblue-GUI/python
         Remove-Item python-embed.zip
@@ -60,7 +61,9 @@ jobs:
         $Shortcut.Save()
 
         cd ../..
-        Compress-Archive -Path dist/MYOblue-GUI -DestinationPath MYOblue_GUI_Windows.zip
+        
+        # Use native system tar instead of Compress-Archive to prevent Node 24 lock-ups
+        tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue-GUI
 
     # ==================== MACOS BUILD (FOR THE FUTURE) ====================
     - name: Build macOS Bundle
@@ -76,9 +79,44 @@ jobs:
 
     # ==================== PUBLISH RELEASE ====================
     - name: Upload Artifacts to Release
-      uses: softprops/action-gh-release@v2
+      uses: actions/github-script@v7
       with:
-        files: |
-          MYOblue_GUI_Windows.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          
+          // Get the tag name from the git ref
+          const tag = context.ref.replace('refs/tags/', '');
+          
+          // Look for an existing release for this tag
+          let release;
+          try {
+            const response = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: tag
+            });
+            release = response.data;
+          } catch (error) {
+            // If it doesn't exist, create a new official release
+            const response = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `MYOblue-GUI Release ${tag}`,
+              body: 'Portable distribution package for Windows (64-bit). Extract the ZIP and double-click Start_MYOblue_GUI.lnk to run.',
+              draft: false,
+              prerelease: false
+            });
+            release = response.data;
+          }
+          
+          // Upload the generated ZIP file safely
+          const filePath = path.join(process.env.GITHUB_WORKSPACE, 'MYOblue_GUI_Windows.zip');
+          await github.rest.repos.uploadReleaseAsset({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            release_id: release.id,
+            name: 'MYOblue_GUI_Windows.zip',
+            data: fs.readFileSync(filePath)
+          });
