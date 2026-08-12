@@ -1,17 +1,14 @@
 name: Build and Release Clean Portable App
-
 on:
   push:
     tags:
       - 'v*'
-
 jobs:
   build-portable:
     strategy:
       matrix:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -21,10 +18,17 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
+        $ErrorActionPreference = "Stop"
+
+        # Enforce secure TLS 1.2 protocol for network operations
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
         New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
 
-        # Force foreground synchronous download using reliable BITS service
-        Start-BitsTransfer -Source 'https://python.org' -Destination 'python-embed.zip'
+        # Deploy isolated embeddable Python runtime environment via WebClient to avoid curl shell aliases
+        $pythonVersion = "3.12.4"
+        $pythonUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
+        (New-Object System.Net.WebClient).DownloadFile($pythonUrl, 'python-embed.zip')
         Expand-Archive -Path python-embed.zip -DestinationPath dist/MYOblue-GUI/python
         Remove-Item python-embed.zip
 
@@ -33,38 +37,39 @@ jobs:
         $pth = Get-ChildItem *.pth | Select-Object -First 1
         (Get-Content $pth) -replace '#import site', 'import site' | Set-Content $pth
 
-        # Force synchronous download for pip installer
-        cd ../../..
-        Start-BitsTransfer -Source 'https://pypa.io' -Destination 'dist/MYOblue-GUI/python/get-pip.py'
-        
-        cd dist/MYOblue-GUI/python
+        # Bootstrap internal pip package manager for runtime dependencies
+        (New-Object System.Net.WebClient).DownloadFile('https://bootstrap.pypa.io/get-pip.py', 'get-pip.py')
         ./python.exe get-pip.py --no-warn-script-location
+        if ($LASTEXITCODE -ne 0) { throw "get-pip.py failed with exit code $LASTEXITCODE" }
         Remove-Item get-pip.py
 
-        # Install dependencies inside the isolated environment
-        ./python.exe -m pip install PyQt5 numpy scipy pyserial pyqtgraph
-        
-        cd ..
+        # Install heavy scientific and UI dependencies locally (pin versions for reproducibility)
+        ./python.exe -m pip install `
+          PyQt5==5.15.10 `
+          numpy==1.26.4 `
+          scipy==1.13.1 `
+          pyserial==3.5 `
+          pyqtgraph==0.13.7
+        if ($LASTEXITCODE -ne 0) { throw "pip install failed with exit code $LASTEXITCODE" }
 
-        # Restructure bundle files safely
+        cd ..
+        # Restructure bundle: move source code to environment, keep assets in root
         Copy-Item ../../MYOblue_GUI.py -Destination ./python/
         Copy-Item ../../config.ini -Destination ./
         Copy-Item -Path ../../img -Destination ./img -Recurse -Force
 
-        # Generate a truly portable Windows launch shortcut (.lnk)
-        $WshShell = New-Object -ComObject WScript.Shell
-        $Shortcut = $WshShell.CreateShortcut("$PWD\Start_MYOblue_GUI.lnk")
-        
-        $Shortcut.TargetPath = "%CD%\python\pythonw.exe"
-        $Shortcut.Arguments = "`"%CD%\python\MYOblue_GUI.py`""
-        $Shortcut.WorkingDirectory = "%CD%"
-        $Shortcut.IconLocation = "%CD%\python\pythonw.exe, 0"
-        $Shortcut.Save()
+        # Generate a portable batch launcher (relative to its own location via %~dp0)
+        # This resolves correctly no matter where the user extracts the zip,
+        # unlike a .lnk shortcut built with %CD%, which is not reliably reevaluated on double-click.
+        $launcher = @'
+@echo off
+cd /d "%~dp0"
+start "" "%~dp0python\pythonw.exe" "%~dp0python\MYOblue_GUI.py"
+'@
+        Set-Content -Path "Start_MYOblue_GUI.bat" -Value $launcher -Encoding ASCII
 
         cd ../..
-        
-        # Archive using native tar tool compatible with Node 24
-        tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue-GUI
+        Compress-Archive -Path dist/MYOblue-GUI -DestinationPath MYOblue_GUI_Windows.zip
 
     # ==================== MACOS BUILD (FOR THE FUTURE) ====================
     - name: Build macOS Bundle
@@ -80,39 +85,9 @@ jobs:
 
     # ==================== PUBLISH RELEASE ====================
     - name: Upload Artifacts to Release
-      uses: actions/github-script@v7
+      uses: softprops/action-gh-release@v2
       with:
-        script: |
-          const fs = require('fs');
-          const path = require('path');
-          const tag = context.ref.replace('refs/tags/', '');
-          
-          let release;
-          try {
-            const response = await github.rest.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag: tag
-            });
-            release = response.data;
-          } catch (error) {
-            const response = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tag,
-              name: `MYOblue-GUI Release ${tag}`,
-              body: 'Portable distribution package for Windows (64-bit). Extract the ZIP and double-click Start_MYOblue_GUI.lnk to run.',
-              draft: false,
-              prerelease: false
-            });
-            release = response.data;
-          }
-          
-          const filePath = path.join(process.env.GITHUB_WORKSPACE, 'MYOblue_GUI_Windows.zip');
-          await github.rest.repos.uploadReleaseAsset({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            release_id: release.id,
-            name: 'MYOblue_GUI_Windows.zip',
-            data: fs.readFileSync(filePath)
-          });
+        files: |
+          MYOblue_GUI_Windows.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
