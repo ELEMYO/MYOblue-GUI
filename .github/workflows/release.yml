@@ -1,0 +1,93 @@
+name: Build and Release Clean Portable App
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-portable:
+    strategy:
+      matrix:
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # ==================== WINDOWS BUILD ====================
+    - name: Build Clean Windows Bundle
+      if: matrix.os == 'windows-latest'
+      shell: powershell
+      run: |
+        # Step 1: Create isolated directories for the app bundle
+        New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
+
+        # Step 2: Download official Python embeddable package (v3.12.9)
+        curl -L -o python-embed.zip https://python.org
+        Expand-Archive -Path python-embed.zip -DestinationPath dist/MYOblue-GUI/python
+        Remove-Item python-embed.zip
+
+        # Step 3: Configure Python path to accept local external packages
+        cd dist/MYOblue-GUI/python
+        $pth = Get-ChildItem *.pth | Select-Object -First 1
+        (Get-Content $pth) -replace '#import site', 'import site' | Set-Content $pth
+
+        # Step 4: Bootstrap internal pip package manager for dependency isolation
+        curl -L -o get-pip.py https://pypa.io
+        ./python.exe get-pip.py --no-warn-script-location
+        rm get-pip.py
+
+        # Step 5: Install precise stack of required project dependencies
+        ./python.exe -m pip install PyQt5 numpy scipy pyserial pyqtgraph
+        
+        # Step 6: Navigate into the bundle directory to structure files safely
+        cd .. # Now we are inside dist/MYOblue-GUI
+
+        # Move application source code inside the python directory to keep root clean
+        Copy-Item ../../MYOblue_GUI.py -Destination ./python/
+        
+        # Place user-facing assets and configuration files directly in the bundle root
+        Copy-Item ../../config.ini -Destination ./
+        Copy-Item -Path ../../img -Destination ./img -Recurse -Force
+
+        # Step 7: Generate a truly portable Windows launch shortcut (.lnk)
+        $WshShell = New-Object -ComObject WScript.Shell
+        $Shortcut = $WshShell.CreateShortcut("$PWD\Start_MYOblue_GUI.lnk")
+        
+        # %CD% is evaluated by Windows at runtime on the user's PC, keeping the path dynamic
+        $Shortcut.TargetPath = "%CD%\python\pythonw.exe"
+        $Shortcut.Arguments = "`"%CD%\python\MYOblue_GUI.py`""
+        
+        # Force working directory to bundle root so config.ini and assets load correctly
+        $Shortcut.WorkingDirectory = "%CD%"
+        
+        # Assign default Python icon from the embedded runtime environment
+        $Shortcut.IconLocation = "%CD%\python\pythonw.exe, 0"
+        $Shortcut.Save()
+
+        # Step 8: Return back to repository root and compress the distribution package
+        cd ../..
+        Compress-Archive -Path dist/MYOblue-GUI -DestinationPath MYOblue_GUI_Windows.zip
+
+    # ==================== MACOS BUILD (FOR THE FUTURE) ====================
+    - name: Build macOS Bundle
+      if: matrix.os == 'macos-latest'
+      run: |
+        echo "macOS build is temporarily disabled"
+
+    # ==================== LINUX BUILD (FOR THE FUTURE) ====================
+    - name: Build Linux Bundle
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        echo "Linux build is temporarily disabled"
+
+    # ==================== PUBLISH RELEASE ====================
+    - name: Upload Artifacts to Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          MYOblue_GUI_Windows.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
