@@ -21,12 +21,10 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
-        # Enforce secure TLS 1.2 protocol for network operations
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
 
-        # Deploy isolated embeddable Python runtime environment via WebClient to avoid curl shell aliases
-        (New-Object System.Net.WebClient).DownloadFile('https://python.org', 'python-embed.zip')
+        # Securely download official Python embeddable package using native Invoke-WebRequest
+        Invoke-WebRequest -Uri 'https://python.org' -OutFile 'python-embed.zip' -UseBasicParsing
         Expand-Archive -Path python-embed.zip -DestinationPath dist/MYOblue-GUI/python
         Remove-Item python-embed.zip
 
@@ -35,8 +33,8 @@ jobs:
         $pth = Get-ChildItem *.pth | Select-Object -First 1
         (Get-Content $pth) -replace '#import site', 'import site' | Set-Content $pth
 
-        # Bootstrap internal pip package manager for runtime dependencies
-        (New-Object System.Net.WebClient).DownloadFile('https://pypa.io', 'get-pip.py')
+        # Securely bootstrap internal pip package manager for runtime dependencies
+        Invoke-WebRequest -Uri 'https://pypa.io' -OutFile 'get-pip.py' -UseBasicParsing
         ./python.exe get-pip.py --no-warn-script-location
         Remove-Item get-pip.py
 
