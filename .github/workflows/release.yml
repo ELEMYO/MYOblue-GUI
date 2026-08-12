@@ -16,34 +16,52 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # Step 1: Use official GitHub action to safely get a verified Python binary (bypasses network blocks)
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12.9'
-
     # ==================== WINDOWS BUILD ====================
     - name: Build Clean Windows Bundle
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
-        # Step 2: Create pristine directory structure
         New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
 
-        # Step 3: Copy the pre-installed secure Python runtime files from GitHub cache
-        $sys_python_dir = Split-Path (Get-Command python.exe).Source
-        Copy-Item -Path "$sys_python_dir\*" -Destination dist/MYOblue-GUI/python/ -Recurse -Force
+        # Step 1: Download official Python embeddable package
+        Start-BitsTransfer -Source 'https://python.org' -Destination 'python-embed.zip'
+        Expand-Archive -Path python-embed.zip -DestinationPath dist/MYOblue-GUI/python -Force
+        Remove-Item python-embed.zip
 
-        # Step 4: Install precise stack of required project dependencies locally
-        dist/MYOblue-GUI/python/python.exe -m pip install --upgrade pip
-        dist/MYOblue-GUI/python/python.exe -m pip install PyQt5 numpy scipy pyserial pyqtgraph
+        # Step 2: Download and bootstrap pip manager temporarily to install libraries
+        cd dist/MYOblue-GUI/python
+        (New-Object System.Net.WebClient).DownloadFile('https://pypa.io', 'get-pip.py')
+        ./python.exe get-pip.py --no-warn-script-location
+        Remove-Item get-pip.py
+
+        # Step 3: Enable site-packages temporarily to allow pip installation
+        (Get-Content python312._pth) -replace '#import site', 'import site' | Set-Content python312._pth
+
+        # Step 4: Install exact stack of required scientific and UI dependencies
+        ./python.exe -m pip install PyQt5 numpy scipy pyserial pyqtgraph
+
+        # Step 5: COMPRESSION TRICK - Pack installed libraries into a single ZIP archive
+        cd Lib/site-packages
+        tar -a -c -f ../../site-packages.zip *
         
-        # Step 5: Restructure the bundle files safely
+        # Step 6: Clean up thousands of unzipped small files from the runner disk
+        cd ../..
+        Remove-Item -Path Lib -Recurse -Force
+        Remove-Item -Path Scripts -Recurse -Force
+        Remove-Item -Path pip* -Recurse -Force
+
+        # Step 7: Update Python path mapping to read libraries directly from the ZIP file
+        # This keeps the final application completely transparent to the user
+        echo "site-packages.zip" | Out-File -FilePath python312._pth -Append -Encoding ascii
+
+        cd ../../..
+
+        # Step 8: Restructure bundle files safely
         Copy-Item MYOblue_GUI.py -Destination dist/MYOblue-GUI/python/
         Copy-Item config.ini -Destination dist/MYOblue-GUI/
         Copy-Item -Path img -Destination dist/MYOblue-GUI/img -Recurse -Force
 
-        # Step 6: Generate a truly portable Windows launch shortcut (.lnk)
+        # Step 9: Generate truly portable Windows launch shortcut (.lnk)
         $WshShell = New-Object -ComObject WScript.Shell
         $Shortcut = $WshShell.CreateShortcut("$PWD\dist\MYOblue-GUI\Start_MYOblue_GUI.lnk")
         
@@ -53,20 +71,10 @@ jobs:
         $Shortcut.IconLocation = "%CD%\python\pythonw.exe, 0"
         $Shortcut.Save()
 
-        # Step 7: Archive the final user package using system tar tool
-        tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue-GUI
-
-    # ==================== MACOS BUILD (FOR THE FUTURE) ====================
-    - name: Build macOS Bundle
-      if: matrix.os == 'macos-latest'
-      run: |
-        echo "macOS build is temporarily disabled"
-
-    # ==================== LINUX BUILD (FOR THE FUTURE) ====================
-    - name: Build Linux Bundle
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        echo "Linux build is temporarily disabled"
+        cd dist
+        
+        # Step 10: Archive user-ready distribution package via system tar
+        tar -a -c -f ../MYOblue_GUI_Windows.zip MYOblue-GUI
 
     # ==================== PUBLISH RELEASE ====================
     - name: Upload Artifacts to Release
@@ -91,7 +99,7 @@ jobs:
               repo: context.repo.repo,
               tag_name: tag,
               name: `MYOblue-GUI Release ${tag}`,
-              body: 'Portable distribution package for Windows (64-bit). Extract the ZIP and double-click Start_MYOblue_GUI.lnk to run.',
+              body: 'High-speed portable package for Windows (64-bit). Extract the ZIP instantly and double-click Start_MYOblue_GUI.lnk to run.',
               draft: false,
               prerelease: false
             });
