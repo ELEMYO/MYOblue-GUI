@@ -23,14 +23,14 @@ jobs:
       run: |
         New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
 
-        # Step 1: Download official Python embeddable package
+        # Step 1: Download official Python embeddable package (FULL URL)
         Start-BitsTransfer -Source 'https://python.org' -Destination 'python-embed.zip'
         Expand-Archive -Path python-embed.zip -DestinationPath dist/MYOblue-GUI/python -Force
         Remove-Item python-embed.zip
 
-        # Step 2: Download and bootstrap pip manager temporarily to install libraries
+        # Step 2: Download and bootstrap pip manager temporarily (FULL URL)
         cd dist/MYOblue-GUI/python
-        (New-Object System.Net.WebClient).DownloadFile('https://pypa.io', 'get-pip.py')
+        Start-BitsTransfer -Source 'https://pypa.io' -Destination 'get-pip.py'
         ./python.exe get-pip.py --no-warn-script-location
         Remove-Item get-pip.py
 
@@ -51,7 +51,6 @@ jobs:
         Remove-Item -Path pip* -Recurse -Force
 
         # Step 7: Update Python path mapping to read libraries directly from the ZIP file
-        # This keeps the final application completely transparent to the user
         echo "site-packages.zip" | Out-File -FilePath python312._pth -Append -Encoding ascii
 
         cd ../../..
