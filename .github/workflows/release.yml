@@ -16,44 +16,36 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # Step 1: Use official GitHub action to safely get a verified Python binary (bypasses network blocks)
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12.9'
+
     # ==================== WINDOWS BUILD ====================
     - name: Build Clean Windows Bundle
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
+        # Step 2: Create pristine directory structure
         New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
 
-        # Download official Python embeddable package using native system curl
-        curl.exe -L -o python-embed.zip https://python.org
-        Expand-Archive -Path python-embed.zip -DestinationPath dist/MYOblue-GUI/python
-        Remove-Item python-embed.zip
+        # Step 3: Copy the pre-installed secure Python runtime files from GitHub cache
+        $sys_python_dir = Split-Path (Get-Command python.exe).Source
+        Copy-Item -Path "$sys_python_dir\*" -Destination dist/MYOblue-GUI/python/ -Recurse -Force
 
-        # Enable local site-packages isolation in embeddable configuration
-        cd dist/MYOblue-GUI/python
-        $pth = Get-ChildItem *.pth | Select-Object -First 1
-        (Get-Content $pth) -replace '#import site', 'import site' | Set-Content $pth
-
-        # Download pip installer using native system curl
-        cd ../../..
-        curl.exe -L -o dist/MYOblue-GUI/python/get-pip.py https://pypa.io
+        # Step 4: Install precise stack of required project dependencies locally
+        dist/MYOblue-GUI/python/python.exe -m pip install --upgrade pip
+        dist/MYOblue-GUI/python/python.exe -m pip install PyQt5 numpy scipy pyserial pyqtgraph
         
-        cd dist/MYOblue-GUI/python
-        ./python.exe get-pip.py --no-warn-script-location
-        Remove-Item get-pip.py
+        # Step 5: Restructure the bundle files safely
+        Copy-Item MYOblue_GUI.py -Destination dist/MYOblue-GUI/python/
+        Copy-Item config.ini -Destination dist/MYOblue-GUI/
+        Copy-Item -Path img -Destination dist/MYOblue-GUI/img -Recurse -Force
 
-        # Install dependencies inside the isolated environment
-        ./python.exe -m pip install PyQt5 numpy scipy pyserial pyqtgraph
-        
-        cd ..
-
-        # Restructure bundle files safely
-        Copy-Item ../../MYOblue_GUI.py -Destination ./python/
-        Copy-Item ../../config.ini -Destination ./
-        Copy-Item -Path ../../img -Destination ./img -Recurse -Force
-
-        # Generate a truly portable Windows launch shortcut (.lnk)
+        # Step 6: Generate a truly portable Windows launch shortcut (.lnk)
         $WshShell = New-Object -ComObject WScript.Shell
-        $Shortcut = $WshShell.CreateShortcut("$PWD\Start_MYOblue_GUI.lnk")
+        $Shortcut = $WshShell.CreateShortcut("$PWD\dist\MYOblue-GUI\Start_MYOblue_GUI.lnk")
         
         $Shortcut.TargetPath = "%CD%\python\pythonw.exe"
         $Shortcut.Arguments = "`"%CD%\python\MYOblue_GUI.py`""
@@ -61,9 +53,7 @@ jobs:
         $Shortcut.IconLocation = "%CD%\python\pythonw.exe, 0"
         $Shortcut.Save()
 
-        cd ../..
-        
-        # Archive using native tar tool compatible with Node 24
+        # Step 7: Archive the final user package using system tar tool
         tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue-GUI
 
     # ==================== MACOS BUILD (FOR THE FUTURE) ====================
