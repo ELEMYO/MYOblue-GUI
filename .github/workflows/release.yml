@@ -42,32 +42,33 @@ jobs:
         cd dist/MYOblue-GUI/python/Lib/site-packages
         tar -a -c -f ../../site-packages.zip *
         
-        # Clean up the thousands of unzipped small files from the runner disk to keep layout pristine
+        # Clean up ONLY external third-party small files from the runner disk to keep layout pristine
         cd ../..
-        Remove-Item -Path Lib -Recurse -Force
+        Remove-Item -Path Lib/site-packages -Recurse -Force
         Remove-Item -Path Scripts -Recurse -Force
         Remove-Item -Path pip* -Recurse -Force
 
         # Step 6: Create path configuration mapping so the Python binary reads libraries directly from the ZIP
-        # This reduces file count dramatically while remaining completely transparent to the application execution
+        # Include standard paths alongside the zip package to prevent encodings/abc file lockups
         @'
 python312.dll
 .
+Lib
 site-packages.zip
 import site
 '@ | Out-File -FilePath python312._pth -Encoding ascii
 
-        cd ../../..
+        # Step 7: Restructure the bundle files safely from within the application folder
+        cd .. # Now we are inside dist/MYOblue-GUI
+        Copy-Item ../../MYOblue_GUI.py -Destination ./python/
+        Copy-Item ../../config.ini -Destination ./
+        Copy-Item -Path ../../img -Destination ./img -Recurse -Force
 
-        # Step 7: Restructure the bundle files safely
-        Copy-Item MYOblue_GUI.py -Destination dist/MYOblue-GUI/python/
-        Copy-Item config.ini -Destination dist/MYOblue-GUI/
-        Copy-Item -Path img -Destination dist/MYOblue-GUI/img -Recurse -Force
-
-        # Step 8: Generate a truly portable Windows launch shortcut (.lnk)
+        # Step 8: Generate a truly portable Windows launch shortcut (.lnk) directly in the final user root
         $WshShell = New-Object -ComObject WScript.Shell
-        $Shortcut = $WshShell.CreateShortcut("$PWD\dist\MYOblue-GUI\Start_MYOblue_GUI.lnk")
+        $Shortcut = $WshShell.CreateShortcut("$PWD\Start_MYOblue_GUI.lnk")
         
+        # %CD% is evaluated by Windows at runtime on the user's PC, keeping paths dynamic
         $Shortcut.TargetPath = "%CD%\python\pythonw.exe"
         $Shortcut.Arguments = "`"%CD%\python\MYOblue_GUI.py`""
         $Shortcut.WorkingDirectory = "%CD%"
@@ -75,6 +76,7 @@ import site
         $Shortcut.Save()
 
         # Step 9: Archive the final user package using system tar tool
+        cd ../..
         tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue-GUI
 
     # ==================== MACOS BUILD (FOR THE FUTURE) ====================
