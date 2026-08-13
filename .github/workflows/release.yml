@@ -44,12 +44,7 @@ jobs:
         Remove-Item get-pip.py
 
         # Install heavy scientific and UI dependencies locally (pin versions for reproducibility)
-        ./python.exe -m pip install `
-          PyQt5==5.15.10 `
-          numpy==1.26.4 `
-          scipy==1.13.1 `
-          pyserial==3.5 `
-          pyqtgraph==0.13.7
+        ./python.exe -m pip install PyQt5==5.15.10 numpy==1.26.4 scipy==1.13.1 pyserial==3.5 pyqtgraph==0.13.7
         if ($LASTEXITCODE -ne 0) { throw "pip install failed with exit code $LASTEXITCODE" }
 
         cd ..
