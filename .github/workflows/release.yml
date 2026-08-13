@@ -1,112 +1,93 @@
 name: Build and Release Clean Portable App
-
 on:
   push:
     tags:
       - 'v*'
-
 jobs:
   build-portable:
     strategy:
       matrix:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-
-    # Step 1: Use official GitHub action to safely get a verified Python binary (bypasses network blocks)
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12.9'
 
     # ==================== WINDOWS BUILD ====================
     - name: Build Clean Windows Bundle
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
-        # Step 2: Create pristine directory structure
+        $ErrorActionPreference = "Stop"
+
+        # Enforce secure TLS 1.2 protocol for network operations
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
         New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
 
-        # Step 3: Copy the pre-installed secure Python runtime files from GitHub cache
-        $sys_python_dir = Split-Path (Get-Command python.exe).Source
-        Copy-Item -Path "$sys_python_dir\*" -Destination dist/MYOblue-GUI/python/ -Recurse -Force
+        # Deploy isolated embeddable Python runtime environment via WebClient to avoid curl shell aliases
+        $pythonVersion = "3.12.4"
+        $pythonUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
+        (New-Object System.Net.WebClient).DownloadFile($pythonUrl, 'python-embed.zip')
+        Expand-Archive -Path python-embed.zip -DestinationPath dist/MYOblue-GUI/python
+        Remove-Item python-embed.zip
 
-        # Step 4: Install precise stack of required project dependencies locally
-        dist/MYOblue-GUI/python/python.exe -m pip install --upgrade pip
-        dist/MYOblue-GUI/python/python.exe -m pip install PyQt5 numpy scipy pyserial pyqtgraph
-        
-        # Step 5: COMPRESSION TRICK - Pack ONLY third-party dependency files into a single ZIP archive
-        # This isolates heavy scientific frameworks while leaving core compiled .pyd binaries intact
-        cd dist/MYOblue-GUI/python/Lib/site-packages
-        tar -a -c -f ../../site-packages.zip *
-        
-        # Clean up the thousands of unzipped small third-party files from the runner disk
-        cd ../..
-        Remove-Item -Path Lib/site-packages -Recurse -Force
-        Remove-Item -Path Scripts -Recurse -Force
-        Remove-Item -Path pip* -Recurse -Force
+        # Enable local site-packages isolation in embeddable configuration
+        cd dist/MYOblue-GUI/python
+        $pth = Get-ChildItem *.pth | Select-Object -First 1
+        (Get-Content $pth) -replace '#import site', 'import site' | Set-Content $pth
 
-        # Step 6: Create path configuration mapping combining local system libraries and zipped extensions
-        Clear-Content -Path python312._pth -ErrorAction SilentlyContinue
-        Add-Content -Path python312._pth -Value "python312.dll"
-        Add-Content -Path python312._pth -Value "."
-        Add-Content -Path python312._pth -Value "Lib"
-        Add-Content -Path python312._pth -Value "site-packages.zip"
-        Add-Content -Path python312._pth -Value "import site"
+        # Bootstrap internal pip package manager for runtime dependencies
+        (New-Object System.Net.WebClient).DownloadFile('https://bootstrap.pypa.io/get-pip.py', 'get-pip.py')
+        ./python.exe get-pip.py --no-warn-script-location
+        if ($LASTEXITCODE -ne 0) { throw "get-pip.py failed with exit code $LASTEXITCODE" }
+        Remove-Item get-pip.py
 
-        # Step 7: Restructure the bundle files safely
-        cd .. # Move into dist/MYOblue-GUI
+        # Install heavy scientific and UI dependencies locally (pin versions for reproducibility)
+        ./python.exe -m pip install `
+          PyQt5==5.15.10 `
+          numpy==1.26.4 `
+          scipy==1.13.1 `
+          pyserial==3.5 `
+          pyqtgraph==0.13.7
+        if ($LASTEXITCODE -ne 0) { throw "pip install failed with exit code $LASTEXITCODE" }
+
+        cd ..
+        # Restructure bundle: move source code to environment, keep assets in root
         Copy-Item ../../MYOblue_GUI.py -Destination ./python/
         Copy-Item ../../config.ini -Destination ./
         Copy-Item -Path ../../img -Destination ./img -Recurse -Force
 
-        # Step 8: Generate an indestructible, portable Windows batch launcher (.bat) directly in the bundle root
-        echo '@echo off' > Run_MYOblue_GUI.bat
-        echo 'set "APP_DIR=%~dp0"' >> Run_MYOblue_GUI.bat
-        echo 'start "" "%APP_DIR%python\pythonw.exe" "%APP_DIR%python\MYOblue_GUI.py"' >> Run_MYOblue_GUI.bat
+        # Generate a portable batch launcher (relative to its own location via %~dp0)
+        # This resolves correctly no matter where the user extracts the zip,
+        # unlike a .lnk shortcut built with %CD%, which is not reliably reevaluated on double-click.
+        $launcher = @'
+@echo off
+cd /d "%~dp0"
+start "" "%~dp0python\pythonw.exe" "%~dp0python\MYOblue_GUI.py"
+'@
+        Set-Content -Path "Start_MYOblue_GUI.bat" -Value $launcher -Encoding ASCII
 
-        # Step 9: Archive the final user package using system tar tool
         cd ../..
-        tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue-GUI
+        Compress-Archive -Path dist/MYOblue-GUI -DestinationPath MYOblue_GUI_Windows.zip
+
+    # ==================== MACOS BUILD (FOR THE FUTURE) ====================
+    - name: Build macOS Bundle
+      if: matrix.os == 'macos-latest'
+      run: |
+        echo "macOS build is temporarily disabled"
+
+    # ==================== LINUX BUILD (FOR THE FUTURE) ====================
+    - name: Build Linux Bundle
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        echo "Linux build is temporarily disabled"
 
     # ==================== PUBLISH RELEASE ====================
     - name: Upload Artifacts to Release
-      uses: actions/github-script@v7
+      uses: softprops/action-gh-release@v2
       with:
-        script: |
-          const fs = require('fs');
-          const path = require('path');
-          const tag = context.ref.replace('refs/tags/', '');
-          
-          let release;
-          try {
-            const response = await github.rest.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag: tag
-            });
-            release = response.data;
-          } catch (error) {
-            const response = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tag,
-              name: `MYOblue-GUI Release ${tag}`,
-              body: 'Portable distribution package for Windows (64-bit). Extract the ZIP instantly and double-click Run_MYOblue_GUI.bat to run.',
-              draft: false,
-              prerelease: false
-            });
-            release = response.data;
-          }
-          
-          const filePath = path.join(process.env.GITHUB_WORKSPACE, 'MYOblue_GUI_Windows.zip');
-          await github.rest.repos.uploadReleaseAsset({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            release_id: release.id,
-            name: 'MYOblue_GUI_Windows.zip',
-            data: fs.readFileSync(filePath)
-          });
+        files: |
+          MYOblue_GUI_Windows.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
