@@ -1,17 +1,26 @@
 name: Build and Release Clean Portable App
+
 on:
   push:
     tags:
       - 'v*'
+
 jobs:
   build-portable:
     strategy:
       matrix:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    # Step 1: Use official GitHub action to safely get a verified Python binary
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12.9'
 
     # ==================== WINDOWS BUILD ====================
     - name: Build Clean Windows Bundle
@@ -20,63 +29,84 @@ jobs:
       run: |
         $ErrorActionPreference = "Stop"
 
-        # Enforce secure TLS 1.2 protocol for network operations
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
+        # Step 2: Create pristine directory structure
         New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
 
-        # Deploy isolated embeddable Python runtime environment via WebClient to avoid curl shell aliases
-        $pythonVersion = "3.12.4"
-        $pythonUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
-        (New-Object System.Net.WebClient).DownloadFile($pythonUrl, 'python-embed.zip')
-        Expand-Archive -Path python-embed.zip -DestinationPath dist/MYOblue-GUI/python
-        Remove-Item python-embed.zip
+        # Step 3: Copy the pre-installed Python runtime files from the setup-python cache
+        $sys_python_dir = Split-Path (Get-Command python.exe).Source
+        Copy-Item -Path "$sys_python_dir\*" -Destination dist/MYOblue-GUI/python/ -Recurse -Force
 
-        # Enable local site-packages isolation in embeddable configuration
-        cd dist/MYOblue-GUI/python
-        $pth = Get-ChildItem *.pth | Select-Object -First 1
-        (Get-Content $pth) -replace '#import site', 'import site' | Set-Content $pth
+        # Step 4: Install pinned project dependencies directly into the bundled runtime
+        # (using an array + splat instead of backtick line-continuation, which is fragile in YAML)
+        dist/MYOblue-GUI/python/python.exe -m pip install --upgrade pip
+        if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit code $LASTEXITCODE" }
 
-        # Bootstrap internal pip package manager for runtime dependencies
-        (New-Object System.Net.WebClient).DownloadFile('https://bootstrap.pypa.io/get-pip.py', 'get-pip.py')
-        ./python.exe get-pip.py --no-warn-script-location
-        if ($LASTEXITCODE -ne 0) { throw "get-pip.py failed with exit code $LASTEXITCODE" }
-        Remove-Item get-pip.py
-
-        # Install heavy scientific and UI dependencies locally (pin versions for reproducibility)
-        ./python.exe -m pip install PyQt5==5.15.10 numpy==1.26.4 scipy==1.13.1 pyserial==3.5 pyqtgraph==0.13.7
+        $packages = @(
+          "PyQt5==5.15.10",
+          "numpy==1.26.4",
+          "scipy==1.13.1",
+          "pyserial==3.5",
+          "pyqtgraph==0.13.7"
+        )
+        dist/MYOblue-GUI/python/python.exe -m pip install @packages
         if ($LASTEXITCODE -ne 0) { throw "pip install failed with exit code $LASTEXITCODE" }
 
-        cd ..
-        # Restructure bundle: move source code to environment, keep assets in root
+        Set-Location dist/MYOblue-GUI/python
+
+        # Step 5: Trim bundle size by removing stdlib pieces the app doesn't need.
+        # IMPORTANT: site-packages itself is NOT zipped/removed here - PyQt5/numpy/scipy
+        # ship compiled .pyd extension modules, which Python's zipimport cannot load.
+        $trimPaths = @(
+          "Lib\test",
+          "Lib\idlelib",
+          "Lib\tkinter",
+          "tcl",
+          "Doc",
+          "Scripts\__pycache__"
+        )
+        foreach ($p in $trimPaths) {
+          if (Test-Path $p) { Remove-Item -Path $p -Recurse -Force }
+        }
+        Get-ChildItem -Path . -Recurse -Directory -Filter "__pycache__" |
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+        # Step 6: If an embeddable-style ._pth file is present, make sure it allows
+        # local site-packages + script directory imports.
+        $pth = Get-ChildItem -Path . -Filter "python3*._pth" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($pth) {
+          $pthLines = @(
+            "python312.zip",
+            ".",
+            "Lib",
+            "Lib\site-packages",
+            "import site"
+          )
+          Set-Content -Path $pth.FullName -Value $pthLines
+        }
+
+        # Step 7: Restructure the bundle files
+        Set-Location ..   # now in dist/MYOblue-GUI
         Copy-Item ../../MYOblue_GUI.py -Destination ./python/
         Copy-Item ../../config.ini -Destination ./
         Copy-Item -Path ../../img -Destination ./img -Recurse -Force
 
-        # Generate a portable batch launcher (relative to its own location via %~dp0)
-        # This resolves correctly no matter where the user extracts the zip,
-        # unlike a .lnk shortcut built with %CD%, which is not reliably reevaluated on double-click.
-        $launcher = @'
-@echo off
-cd /d "%~dp0"
-start "" "%~dp0python\pythonw.exe" "%~dp0python\MYOblue_GUI.py"
-'@
-        Set-Content -Path "Start_MYOblue_GUI.bat" -Value $launcher -Encoding ASCII
+        # Step 8: Generate a portable Windows batch launcher (resolves relative to its own folder)
+        # Built as an array of lines rather than a here-string, since here-string terminators
+        # ('@) must sit at column 0 in Windows PowerShell 5.1 and easily break inside YAML.
+        $launcherLines = @(
+          "@echo off",
+          "set ""APP_DIR=%~dp0""",
+          "start """" ""%APP_DIR%python\pythonw.exe"" ""%APP_DIR%python\MYOblue_GUI.py"""
+        )
+        Set-Content -Path "Run_MYOblue_GUI.bat" -Value $launcherLines -Encoding ASCII
 
-        cd ../..
-        Compress-Archive -Path dist/MYOblue-GUI -DestinationPath MYOblue_GUI_Windows.zip
+        # Step 9: Archive the final user package
+        Set-Location ../..
+        tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue-GUI
 
-    # ==================== MACOS BUILD (FOR THE FUTURE) ====================
-    - name: Build macOS Bundle
-      if: matrix.os == 'macos-latest'
-      run: |
-        echo "macOS build is temporarily disabled"
-
-    # ==================== LINUX BUILD (FOR THE FUTURE) ====================
-    - name: Build Linux Bundle
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        echo "Linux build is temporarily disabled"
+        if (-not (Test-Path MYOblue_GUI_Windows.zip)) {
+          throw "Build did not produce MYOblue_GUI_Windows.zip"
+        }
 
     # ==================== PUBLISH RELEASE ====================
     - name: Upload Artifacts to Release
@@ -84,5 +114,8 @@ start "" "%~dp0python\pythonw.exe" "%~dp0python\MYOblue_GUI.py"
       with:
         files: |
           MYOblue_GUI_Windows.zip
+        body: |
+          Portable distribution package for Windows (64-bit).
+          Extract the ZIP and double-click Run_MYOblue_GUI.bat to run - no installation needed.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
