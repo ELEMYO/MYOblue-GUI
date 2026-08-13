@@ -16,6 +16,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # Step 1: Use official GitHub action to safely get a verified Python binary (bypasses network blocks)
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -26,23 +27,29 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
+        # Step 2: Create pristine directory structure
         New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
 
+        # Step 3: Copy the pre-installed secure Python runtime files from GitHub cache
         $sys_python_dir = Split-Path (Get-Command python.exe).Source
         Copy-Item -Path "$sys_python_dir\*" -Destination dist/MYOblue-GUI/python/ -Recurse -Force
 
+        # Step 4: Install precise stack of required project dependencies locally
         dist/MYOblue-GUI/python/python.exe -m pip install --upgrade pip
         dist/MYOblue-GUI/python/python.exe -m pip install PyQt5 numpy scipy pyserial pyqtgraph
         
+        # Step 5: COMPRESSION TRICK - Pack ONLY third-party dependency files into a single ZIP archive
+        # This isolates heavy scientific frameworks while leaving core compiled .pyd binaries intact
         cd dist/MYOblue-GUI/python/Lib/site-packages
         tar -a -c -f ../../site-packages.zip *
         
+        # Clean up the thousands of unzipped small third-party files from the runner disk
         cd ../..
         Remove-Item -Path Lib/site-packages -Recurse -Force
         Remove-Item -Path Scripts -Recurse -Force
         Remove-Item -Path pip* -Recurse -Force
 
-        # Simplified isolated path registration compatible with all text parsers
+        # Step 6: Create path configuration mapping combining local system libraries and zipped extensions
         Clear-Content -Path python312._pth -ErrorAction SilentlyContinue
         Add-Content -Path python312._pth -Value "python312.dll"
         Add-Content -Path python312._pth -Value "."
@@ -50,20 +57,18 @@ jobs:
         Add-Content -Path python312._pth -Value "site-packages.zip"
         Add-Content -Path python312._pth -Value "import site"
 
-        cd ..
+        # Step 7: Restructure the bundle files safely
+        cd .. # Move into dist/MYOblue-GUI
         Copy-Item ../../MYOblue_GUI.py -Destination ./python/
         Copy-Item ../../config.ini -Destination ./
         Copy-Item -Path ../../img -Destination ./img -Recurse -Force
 
-        $WshShell = New-Object -ComObject WScript.Shell
-        $Shortcut = $WshShell.CreateShortcut("$PWD\Start_MYOblue_GUI.lnk")
-        
-        $Shortcut.TargetPath = "%CD%\python\pythonw.exe"
-        $Shortcut.Arguments = "`"%CD%\python\MYOblue_GUI.py`""
-        $Shortcut.WorkingDirectory = "%CD%"
-        $Shortcut.IconLocation = "%CD%\python\pythonw.exe, 0"
-        $Shortcut.Save()
+        # Step 8: Generate an indestructible, portable Windows batch launcher (.bat) directly in the bundle root
+        echo '@echo off' > Run_MYOblue_GUI.bat
+        echo 'set "APP_DIR=%~dp0"' >> Run_MYOblue_GUI.bat
+        echo 'start "" "%APP_DIR%python\pythonw.exe" "%APP_DIR%python\MYOblue_GUI.py"' >> Run_MYOblue_GUI.bat
 
+        # Step 9: Archive the final user package using system tar tool
         cd ../..
         tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue-GUI
 
@@ -90,7 +95,7 @@ jobs:
               repo: context.repo.repo,
               tag_name: tag,
               name: `MYOblue-GUI Release ${tag}`,
-              body: 'Portable distribution package for Windows (64-bit). Extract the ZIP instantly and double-click Start_MYOblue_GUI.lnk to run.',
+              body: 'Portable distribution package for Windows (64-bit). Extract the ZIP instantly and double-click Run_MYOblue_GUI.bat to run.',
               draft: false,
               prerelease: false
             });
