@@ -22,62 +22,30 @@ jobs:
         python-version: '3.12.9'
 
     # ==================== WINDOWS BUILD ====================
-    - name: Build Minimal Portable Bundle
+    - name: Build Trimmed Portable Bundle (no compiled exe)
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
         $ErrorActionPreference = "Stop"
+
+        New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
+
+        $sys_python_dir = Split-Path (Get-Command python.exe).Source
+        Copy-Item -Path "$sys_python_dir\*" -Destination dist/MYOblue-GUI/python/ -Recurse -Force
 
         $packages = @(
           "PyQt5==5.15.10",
           "numpy==1.26.4",
           "scipy==1.13.1",
           "pyserial==3.5",
-          "pyqtgraph==0.13.7",
-          "pyinstaller==6.10.0"
+          "pyqtgraph==0.13.7"
         )
-        python -m pip install --upgrade pip
+        dist/MYOblue-GUI/python/python.exe -m pip install --upgrade pip
         if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit code $LASTEXITCODE" }
-        python -m pip install @packages
+        dist/MYOblue-GUI/python/python.exe -m pip install @packages
         if ($LASTEXITCODE -ne 0) { throw "pip install failed with exit code $LASTEXITCODE" }
 
-        # --onedir (not --onefile): no self-extracting temp-unpack at runtime, which is
-        # the main behavior Defender/SmartScreen heuristics flag on PyInstaller builds.
-        # PyInstaller's import-graph analysis (modulegraph) automatically includes only
-        # what MYOblue_GUI.py actually reaches - correctly handling scipy's internal
-        # cross-imports instead of us guessing which files are "safe" to delete.
-        #
-        # --exclude-module drops PyQt5 submodules the app never imports (QtCore/QtGui/
-        # QtWidgets only, per the source): networking, SQL, multimedia, QML/Quick,
-        # positioning/sensors/bluetooth/nfc, print support, dev tools, 3D, web, etc.
-        $excludes = @(
-          "PyQt5.QtNetwork", "PyQt5.QtSql", "PyQt5.QtMultimedia", "PyQt5.QtMultimediaWidgets",
-          "PyQt5.QtQml", "PyQt5.QtQuick", "PyQt5.QtQuickWidgets", "PyQt5.QtPositioning",
-          "PyQt5.QtSensors", "PyQt5.QtBluetooth", "PyQt5.QtNfc", "PyQt5.QtHelp", "PyQt5.QtTest",
-          "PyQt5.QtXml", "PyQt5.QtXmlPatterns", "PyQt5.QtDBus", "PyQt5.QtPrintSupport",
-          "PyQt5.QtDesigner", "PyQt5.QtWebSockets", "PyQt5.QtWebChannel",
-          "PyQt5.QtWebEngineWidgets", "PyQt5.QtSerialPort", "PyQt5.QtRemoteObjects",
-          "PyQt5.QtScxml", "PyQt5.QtLocation", "PyQt5.QtTextToSpeech", "PyQt5.QAxContainer",
-          "PyQt5.QtWinExtras", "PyQt5.Qt3DCore", "PyQt5.Qt3DRender", "PyQt5.Qt3DInput",
-          "PyQt5.Qt3DLogic", "PyQt5.Qt3DAnimation", "PyQt5.Qt3DExtras", "PyQt5.QtWebView",
-          "PyQt5.QtGamepad", "tkinter"
-        )
-        $excludeArgs = @()
-        foreach ($m in $excludes) { $excludeArgs += "--exclude-module"; $excludeArgs += $m }
-
-        $pyinstallerArgs = @(
-          "--onedir",
-          "--noupx",
-          "--windowed",
-          "--name", "MYOblue_GUI",
-          "--add-data", "img;img"
-        ) + $excludeArgs + @("MYOblue_GUI.py")
-
-        pyinstaller @pyinstallerArgs
-        if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed with exit code $LASTEXITCODE" }
-
-        # config.ini stays external (not bundled) so users can edit it directly
-        Copy-Item config.ini -Destination dist\MYOblue_GUI\
+        Set-Location dist/MYOblue-GUI/python
 
         function Get-TreeStats($path) {
           $items = Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue
@@ -85,9 +53,92 @@ jobs:
           $sizeMB = [math]::Round((($items | Measure-Object -Property Length -Sum).Sum) / 1MB, 1)
           return "$count files, $sizeMB MB"
         }
-        Write-Host "Final bundle: $(Get-TreeStats 'dist\MYOblue_GUI')"
+        Write-Host "Before trim: $(Get-TreeStats '.')"
 
-        tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue_GUI
+        # ---- 1. Strip stdlib pieces not needed by a GUI/numeric app ----
+        foreach ($p in @("Lib\test", "Lib\idlelib", "Lib\tkinter", "tcl", "Doc")) {
+          if (Test-Path $p) { Remove-Item -Path $p -Recurse -Force }
+        }
+
+        # ---- 2. Strip test/testing dirs from every installed package ----
+        Get-ChildItem -Path "Lib\site-packages" -Recurse -Directory -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -in @("tests", "testing", "test") } |
+          Sort-Object FullName -Descending |
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+        # ---- 3. Strip PyQt5's structural bloat (dev tools, translations, QML tree, unused plugin families) ----
+        $qtRoot = Get-ChildItem -Path "Lib\site-packages\PyQt5" -Directory -Filter "Qt*" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($qtRoot) {
+          $qtTrim = @(
+            "qml", "translations", "examples",
+            "bin\designer.exe", "bin\linguist.exe", "bin\lrelease.exe",
+            "bin\lupdate.exe", "bin\lconvert.exe", "bin\assistant.exe",
+            "bin\qmlscene.exe", "bin\qtdiag.exe", "bin\qtplugininfo.exe",
+            "plugins\sqldrivers", "plugins\bearer", "plugins\canbus",
+            "plugins\designer", "plugins\gamepads", "plugins\generic",
+            "plugins\geometryloaders", "plugins\geoservices",
+            "plugins\mediaservice", "plugins\playlistformats",
+            "plugins\position", "plugins\printsupport",
+            "plugins\sensorgestures", "plugins\sensors",
+            "plugins\texttospeech", "plugins\videonode", "plugins\webview"
+          )
+          foreach ($p in $qtTrim) {
+            $full = Join-Path $qtRoot.FullName $p
+            if (Test-Path $full) { Remove-Item -Path $full -Recurse -Force }
+          }
+        }
+        Get-ChildItem -Path "Lib\site-packages\PyQt5" -Filter "*.exe" -ErrorAction SilentlyContinue |
+          Remove-Item -Force -ErrorAction SilentlyContinue
+
+        # ---- 4. Remove specific unused PyQt5 submodules (.pyd) and their Qt DLLs by name ----
+        # The app only imports QtCore, QtGui, QtWidgets (per source) - everything below
+        # is unreachable code, safe to delete outright (unlike scipy, PyQt5 submodules
+        # are independent bindings, not cross-imported internally).
+        $unusedQtModules = @(
+          "QtNetwork","QtSql","QtMultimedia","QtMultimediaWidgets","QtQml","QtQuick",
+          "QtQuickWidgets","QtPositioning","QtSensors","QtBluetooth","QtNfc",
+          "QtPrintSupport","QtWebSockets","QtWebChannel","QtDesigner","QtHelp","QtTest",
+          "Qt3DCore","Qt3DRender","Qt3DInput","Qt3DLogic","Qt3DAnimation","Qt3DExtras",
+          "QtSerialPort","QtRemoteObjects","QtScxml","QtTextToSpeech","QtWebView",
+          "QtGamepad","QtLocation","QtXml","QtXmlPatterns","QtDBus"
+        )
+        foreach ($name in $unusedQtModules) {
+          $pyd = Join-Path "Lib\site-packages\PyQt5" "$name.pyd"
+          if (Test-Path $pyd) { Remove-Item $pyd -Force }
+          if ($qtRoot) {
+            $dllName = "Qt5" + $name.Substring(2)
+            $dll = Join-Path $qtRoot.FullName "bin\$dllName.dll"
+            if (Test-Path $dll) { Remove-Item $dll -Force }
+          }
+        }
+
+        # ---- 5. Remove bytecode caches ----
+        Get-ChildItem -Path . -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+        Write-Host "After trim: $(Get-TreeStats '.')"
+
+        # ---- 6. Point Python at local site-packages ----
+        $pth = Get-ChildItem -Path . -Filter "python3*._pth" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($pth) {
+          Set-Content -Path $pth.FullName -Value @("python312.zip", ".", "Lib", "Lib\site-packages", "import site")
+        }
+
+        Set-Location ..
+        Copy-Item ../../MYOblue_GUI.py -Destination ./python/
+        Copy-Item ../../config.ini -Destination ./
+        Copy-Item -Path ../../img -Destination ./img -Recurse -Force
+
+        # ---- 7. Plain .bat launcher - calls the official (Microsoft/PSF-signed) pythonw.exe directly ----
+        $launcherLines = @(
+          "@echo off",
+          "set ""APP_DIR=%~dp0""",
+          "start """" ""%APP_DIR%python\pythonw.exe"" ""%APP_DIR%python\MYOblue_GUI.py"""
+        )
+        Set-Content -Path "Run_MYOblue_GUI.bat" -Value $launcherLines -Encoding ASCII
+
+        Set-Location ../..
+        tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue-GUI
 
         if (-not (Test-Path MYOblue_GUI_Windows.zip)) {
           throw "Build did not produce MYOblue_GUI_Windows.zip"
@@ -101,6 +152,6 @@ jobs:
           MYOblue_GUI_Windows.zip
         body: |
           Portable distribution package for Windows (64-bit).
-          Extract the ZIP and double-click MYOblue_GUI.exe to run - no installation needed.
+          Extract the ZIP and double-click Run_MYOblue_GUI.bat to run - no installation needed.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
