@@ -84,6 +84,7 @@ jobs:
         if ($qtRoot) {
           $qtTrim = @(
             "qml", "translations", "examples", "plugins\imageformats", "plugins\iconengines", "plugins\audio",
+            "plugins\platforms\qminimal.dll", "plugins\platforms\qoffscreen.dll",
             "bin\designer.exe", "bin\linguist.exe", "bin\lrelease.exe", "bin\lupdate.exe", "bin\lconvert.exe", 
             "bin\assistant.exe", "bin\qmlscene.exe", "bin\qtdiag.exe", "bin\qtplugininfo.exe",
             "plugins\sqldrivers", "plugins\bearer", "plugins\canbus", "plugins\designer", "plugins\gamepads", 
@@ -118,20 +119,23 @@ jobs:
           }
         }
 
-        # ---- 5. Optimize SciPy by stripping heavy unused modules ----
-        # Keeping only signal and fftpack features required by the app
+        # ---- 5. Optimize SciPy & pyqtgraph (Stripping heavy CPU-unused modules) ----
+        # Keeping signal, fftpack, linalg, and special features required by the app internally
         $scipyPath = "Lib\site-packages\scipy"
         if (Test-Path $scipyPath) {
           $scipyTrim = @(
             "cluster", "datasets", "integrate", "interpolate", "io", 
-            "linalg", "ndimage", "odr", "optimize", "spatial", 
-            "special", "stats", "_lib\tests"
+            "ndimage", "odr", "optimize", "spatial", "stats", "_lib\tests"
           )
           foreach ($p in $scipyTrim) {
             $full = Join-Path $scipyPath $p
             if (Test-Path $full) { Remove-Item -Path $full -Recurse -Force }
           }
         }
+
+        # Clean up pyqtgraph internal developer tools
+        $pqgCompiler = "Lib\site-packages\pyqtgraph\compiler"
+        if (Test-Path $pqgCompiler) { Remove-Item -Path $pqgCompiler -Recurse -Force }
 
         # ---- 6. Remove C header files (.h/.pxd) left from package compilation ----
         Get-ChildItem -Path "Lib\site-packages" -Recurse -Filter "*.h" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
@@ -147,13 +151,23 @@ jobs:
         if (Test-Path ../../config.ini) { Copy-Item ../../config.ini -Destination ./ }
         if (Test-Path ../../img) { Copy-Item -Path ../../img -Destination ./img -Recurse -Force }
 
-        # ---- 7. Create a Windows .bat launcher using the windowless pythonw.exe executable ----
-        $launcherLines = @(
-          "@echo off",
-          "set ""APP_DIR=%~dp0""",
-          "start """" ""%APP_DIR%python\pythonw.exe"" ""%APP_DIR%python\MYOblue_GUI.py"""
-        )
-        Set-Content -Path "Run_MYOblue_GUI.bat" -Value $launcherLines -Encoding ASCII
+        # ---- 7. Create a debugging Windows .bat launcher ----
+        # Using a safe here-string format to prevent syntax errors in CMD
+        $batContent = @"
+@echo off
+set "APP_DIR=%~dp0"
+cd /d "%APP_DIR%python"
+"%APP_DIR%python\python.exe" "%APP_DIR%python\MYOblue_GUI.py"
+if %errorlevel% neq 0 (
+    echo.
+    echo --------------------------------------------------
+    echo CRITICAL ERROR: Python script crashed!
+    echo Error Code: %errorlevel%
+    echo --------------------------------------------------
+    pause
+)
+"@
+        Set-Content -Path "Run_MYOblue_GUI.bat" -Value $batContent -Encoding ASCII
 
         # Move back to repository root and pack the application bundle into a ZIP archive
         Set-Location ../..
