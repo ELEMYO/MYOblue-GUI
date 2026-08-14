@@ -16,93 +16,79 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # Step 1: Use official GitHub action to safely get a verified Python binary
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.12.9'
+        cache: 'pip'
 
     # ==================== WINDOWS BUILD ====================
-    - name: Build Clean Windows Bundle
+    - name: Build Minimal Portable Bundle
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
         $ErrorActionPreference = "Stop"
-
-        # Step 2: Create pristine directory structure
-        New-Item -ItemType Directory -Force -Path dist/MYOblue-GUI/python | Out-Null
-
-        # Step 3: Copy the pre-installed Python runtime files from the setup-python cache
-        $sys_python_dir = Split-Path (Get-Command python.exe).Source
-        Copy-Item -Path "$sys_python_dir\*" -Destination dist/MYOblue-GUI/python/ -Recurse -Force
-
-        # Step 4: Install pinned project dependencies directly into the bundled runtime
-        # (using an array + splat instead of backtick line-continuation, which is fragile in YAML)
-        dist/MYOblue-GUI/python/python.exe -m pip install --upgrade pip
-        if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit code $LASTEXITCODE" }
 
         $packages = @(
           "PyQt5==5.15.10",
           "numpy==1.26.4",
           "scipy==1.13.1",
           "pyserial==3.5",
-          "pyqtgraph==0.13.7"
+          "pyqtgraph==0.13.7",
+          "pyinstaller==6.10.0"
         )
-        dist/MYOblue-GUI/python/python.exe -m pip install @packages
+        python -m pip install --upgrade pip
+        if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit code $LASTEXITCODE" }
+        python -m pip install @packages
         if ($LASTEXITCODE -ne 0) { throw "pip install failed with exit code $LASTEXITCODE" }
 
-        Set-Location dist/MYOblue-GUI/python
-
-        # Step 5: Trim bundle size by removing stdlib pieces the app doesn't need.
-        # IMPORTANT: site-packages itself is NOT zipped/removed here - PyQt5/numpy/scipy
-        # ship compiled .pyd extension modules, which Python's zipimport cannot load.
-        $trimPaths = @(
-          "Lib\test",
-          "Lib\idlelib",
-          "Lib\tkinter",
-          "tcl",
-          "Doc",
-          "Scripts\__pycache__"
+        # --onedir (not --onefile): no self-extracting temp-unpack at runtime, which is
+        # the main behavior Defender/SmartScreen heuristics flag on PyInstaller builds.
+        # PyInstaller's import-graph analysis (modulegraph) automatically includes only
+        # what MYOblue_GUI.py actually reaches - correctly handling scipy's internal
+        # cross-imports instead of us guessing which files are "safe" to delete.
+        #
+        # --exclude-module drops PyQt5 submodules the app never imports (QtCore/QtGui/
+        # QtWidgets only, per the source): networking, SQL, multimedia, QML/Quick,
+        # positioning/sensors/bluetooth/nfc, print support, dev tools, 3D, web, etc.
+        $excludes = @(
+          "PyQt5.QtNetwork", "PyQt5.QtSql", "PyQt5.QtMultimedia", "PyQt5.QtMultimediaWidgets",
+          "PyQt5.QtQml", "PyQt5.QtQuick", "PyQt5.QtQuickWidgets", "PyQt5.QtPositioning",
+          "PyQt5.QtSensors", "PyQt5.QtBluetooth", "PyQt5.QtNfc", "PyQt5.QtHelp", "PyQt5.QtTest",
+          "PyQt5.QtXml", "PyQt5.QtXmlPatterns", "PyQt5.QtDBus", "PyQt5.QtPrintSupport",
+          "PyQt5.QtDesigner", "PyQt5.QtWebSockets", "PyQt5.QtWebChannel",
+          "PyQt5.QtWebEngineWidgets", "PyQt5.QtSerialPort", "PyQt5.QtRemoteObjects",
+          "PyQt5.QtScxml", "PyQt5.QtLocation", "PyQt5.QtTextToSpeech", "PyQt5.QAxContainer",
+          "PyQt5.QtWinExtras", "PyQt5.Qt3DCore", "PyQt5.Qt3DRender", "PyQt5.Qt3DInput",
+          "PyQt5.Qt3DLogic", "PyQt5.Qt3DAnimation", "PyQt5.Qt3DExtras", "PyQt5.QtWebView",
+          "PyQt5.QtGamepad", "tkinter"
         )
-        foreach ($p in $trimPaths) {
-          if (Test-Path $p) { Remove-Item -Path $p -Recurse -Force }
+        $excludeArgs = @()
+        foreach ($m in $excludes) { $excludeArgs += "--exclude-module"; $excludeArgs += $m }
+
+        $pyinstallerArgs = @(
+          "--onedir",
+          "--noupx",
+          "--windowed",
+          "--name", "MYOblue_GUI",
+          "--add-data", "img;img"
+        ) + $excludeArgs + @("MYOblue_GUI.py")
+
+        pyinstaller @pyinstallerArgs
+        if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed with exit code $LASTEXITCODE" }
+
+        # config.ini stays external (not bundled) so users can edit it directly
+        Copy-Item config.ini -Destination dist\MYOblue_GUI\
+
+        function Get-TreeStats($path) {
+          $items = Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue
+          $count = ($items | Measure-Object).Count
+          $sizeMB = [math]::Round((($items | Measure-Object -Property Length -Sum).Sum) / 1MB, 1)
+          return "$count files, $sizeMB MB"
         }
-        Get-ChildItem -Path . -Recurse -Directory -Filter "__pycache__" |
-          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "Final bundle: $(Get-TreeStats 'dist\MYOblue_GUI')"
 
-        # Step 6: If an embeddable-style ._pth file is present, make sure it allows
-        # local site-packages + script directory imports.
-        $pth = Get-ChildItem -Path . -Filter "python3*._pth" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($pth) {
-          $pthLines = @(
-            "python312.zip",
-            ".",
-            "Lib",
-            "Lib\site-packages",
-            "import site"
-          )
-          Set-Content -Path $pth.FullName -Value $pthLines
-        }
-
-        # Step 7: Restructure the bundle files
-        Set-Location ..   # now in dist/MYOblue-GUI
-        Copy-Item ../../MYOblue_GUI.py -Destination ./python/
-        Copy-Item ../../config.ini -Destination ./
-        Copy-Item -Path ../../img -Destination ./img -Recurse -Force
-
-        # Step 8: Generate a portable Windows batch launcher (resolves relative to its own folder)
-        # Built as an array of lines rather than a here-string, since here-string terminators
-        # ('@) must sit at column 0 in Windows PowerShell 5.1 and easily break inside YAML.
-        $launcherLines = @(
-          "@echo off",
-          "set ""APP_DIR=%~dp0""",
-          "start """" ""%APP_DIR%python\pythonw.exe"" ""%APP_DIR%python\MYOblue_GUI.py"""
-        )
-        Set-Content -Path "Run_MYOblue_GUI.bat" -Value $launcherLines -Encoding ASCII
-
-        # Step 9: Archive the final user package
-        Set-Location ../..
-        tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue-GUI
+        tar -a -c -f MYOblue_GUI_Windows.zip -C dist MYOblue_GUI
 
         if (-not (Test-Path MYOblue_GUI_Windows.zip)) {
           throw "Build did not produce MYOblue_GUI_Windows.zip"
@@ -116,6 +102,6 @@ jobs:
           MYOblue_GUI_Windows.zip
         body: |
           Portable distribution package for Windows (64-bit).
-          Extract the ZIP and double-click Run_MYOblue_GUI.bat to run - no installation needed.
+          Extract the ZIP and double-click MYOblue_GUI.exe to run - no installation needed.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
