@@ -1505,6 +1505,8 @@ class SerialMonitor:
                         rtscts=False, 
                         timeout=0
                     )
+                    self.ser.rts = True
+                    self.ser.dtr = True
                     self.connect = True             
                     QtCore.QTimer.singleShot(500, self.ser.flushInput)
                 except SerialException :
@@ -1526,8 +1528,10 @@ class SerialMonitor:
             try:
                self.ser.close()
                self.ser.open()
+               self.ser.dtr = True
+               self.ser.rts = True
             except (SerialException, OSError):
-                pass
+                self.connect = False
             pass
         return msg
 
